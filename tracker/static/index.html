@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Masters Tracker</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='4' y='4' width='56' height='56' rx='14' fill='%231f3864'/><path d='M18 34l10 10 18-22' stroke='white' stroke-width='7' fill='none'/></svg>">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<aside>
+  <div class="brand">Masters Tracker<small id="brand-date"></small></div>
+  <nav>
+    <a data-view="today" class="active">Today</a>
+    <a data-view="gre">GRE Prep</a>
+    <a data-view="calendar">Upcoming</a>
+    <a data-view="tasks">Tasks</a>
+    <a data-view="programs">Programmes</a>
+    <a data-view="habits">Habits &amp; schedule</a>
+    <a data-view="reminders">Reminders</a>
+    <a data-view="assistant">Assistant</a>
+    <a data-view="research">Research queue</a>
+    <a data-view="settings">Settings</a>
+  </nav>
+  <div class="aside-foot"><button id="sync-btn" class="ghost">Sync to Excel</button></div>
+</aside>
+<main id="view"></main>
+<div id="toast"></div>
+<script src="/static/app.js"></script>
+<script src="/static/gre.js"></script>
+<script src="/static/gre_course.js"></script>
+<script src="/static/gre_results.js"></script>
+<script src="/static/gre_notes.js"></script>
+<script src="/static/gre_extra.js"></script>
+</body>
+</html>

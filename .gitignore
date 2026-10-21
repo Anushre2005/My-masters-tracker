@@ -1,0 +1,15 @@
+# Python / build output
+.venv/
+__pycache__/
+*.pyc
+build/
+dist/
+build.log
+
+# personal data - never commit
+data/
+*.db
+*.db-wal
+*.db-shm
+# index of a private Google Drive folder (see tracker/gre_resources_example.py)
+tracker/gre_resources.py
