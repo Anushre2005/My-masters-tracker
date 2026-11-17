@@ -239,6 +239,8 @@ def run(path=None):
                    'VALUES (?,?,?,?,?,?,?,?)', rows)
 
     db.set_setting('last_import', dt.datetime.now().isoformat(timespec='seconds'))
+    from . import extra_programs  # programmes added in the app are not in the Excel file - put them back
+    extra_programs.ensure()
     if calc:
         shutil.rmtree(os.path.dirname(calc), ignore_errors=True)
     return {

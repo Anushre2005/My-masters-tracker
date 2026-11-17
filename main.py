@@ -62,6 +62,11 @@ def main():
             importer.import_details()
         except Exception as e:
             print('details import failed:', e)
+    try:  # programmes added in the app (US biotech + business + AI options)
+        from tracker import extra_programs
+        extra_programs.ensure()
+    except Exception as e:
+        print('extra programmes failed:', e)
 
     # database health check + daily backup before anything writes
     try:
