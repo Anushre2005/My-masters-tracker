@@ -21,6 +21,8 @@ DEFAULT_SETTINGS = {
     # planning FX (INR per 1 unit) + fee uplift, from the Excel Budget tab; editable in Settings
     'fx_USD': '90', 'fx_GBP': '120', 'fx_EUR': '105', 'fx_SGD': '70', 'fx_AUD': '60', 'fx_CAD': '65', 'fx_CHF': '112',
     'fee_uplift': '0.075',
+    # official-page watcher (sitewatch.py)
+    'watch_enabled': '1', 'watch_hours': '12', 'watch_notify': '1',
 }
 
 # columns added after the first release (programme details / costs)

@@ -267,3 +267,15 @@ pre.ocr { white-space: pre-wrap; font-size: 12px; max-height: 280px; overflow: a
 .fcard-front { font-size: 18px; font-weight: 600; margin: 12px 0; line-height: 1.5; }
 .fcard-back { font-size: 16px; padding: 10px 12px; border-radius: 8px; background: var(--accent-soft); margin-top: 8px; }
 .weekly .stat .n { font-size: 22px; }
+
+/* site updates + scholarships */
+.nav-badge { display: inline-block; min-width: 18px; padding: 0 6px; margin-left: 4px; border-radius: 99px; background: var(--bad); color: #fff; font-size: 11px; font-weight: 700; text-align: center; }
+.award { border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin: 10px 0; }
+.award table.kv td:first-child { width: 130px; color: var(--muted); vertical-align: top; }
+.award details { margin-top: 6px; }
+.award ol, .award ul { margin: 4px 0 8px 18px; padding: 0; }
+.chg.unseen { background: var(--accent-soft); }
+.diff { font-family: ui-monospace, Consolas, monospace; font-size: 12px; white-space: pre-wrap; padding: 1px 4px; }
+.diff.add { color: var(--ok); }
+.diff.del { color: var(--bad); }
+a.btnlink { font-size: 12px; font-weight: 600; color: var(--accent-2); white-space: nowrap; }

@@ -5,6 +5,7 @@ and keeps a tray icon. Closing the window hides it to the tray so reminders keep
 quit from the tray menu. `--hidden` starts in the tray only (used for autostart).
 """
 import os
+import re
 import socket
 import sys
 import threading
@@ -21,7 +22,7 @@ if sys.stdout is None or sys.stderr is None:
     _log = open(os.path.join(db.DATA_DIR, 'app.log'), 'a', buffering=1, encoding='utf-8')
     sys.stdout = sys.stderr = _log
 
-from tracker import engine, excel_sync, importer, mobile, notify, server  # noqa: E402
+from tracker import engine, excel_sync, importer, mobile, notify, server, sitewatch  # noqa: E402
 
 
 def port_in_use(port):
@@ -67,6 +68,12 @@ def main():
         extra_programs.ensure()
     except Exception as e:
         print('extra programmes failed:', e)
+    try:  # scholarship tasks + official pages to watch
+        from tracker import funding
+        funding.ensure_tasks()
+        sitewatch.sync_pages()
+    except Exception as e:
+        print('funding / site-watch setup failed:', e)
 
     # database health check + daily backup before anything writes
     try:
@@ -99,6 +106,30 @@ def main():
         window.restore()
 
     server.show_window = show
+
+    def browser_fetch(page_url, timeout=60):
+        """Read a page that blocks scripts through a hidden window of the app's own browser (WebView2)."""
+        loaded = threading.Event()
+        w = webview.create_window('page check', page_url, hidden=True, focus=False, width=1280, height=900)
+        w.events.loaded += lambda: loaded.set()
+        try:
+            if not loaded.wait(timeout):
+                return None
+            html = ''
+            for _ in range(4):  # bot-check pages reload themselves after a few seconds
+                time.sleep(4)
+                html = w.evaluate_js('document.documentElement.outerHTML') or ''
+                if not re.search(r'just a moment|cf-chl|captcha|_Incapsula_', html[:20000], re.I):
+                    break
+            return w.evaluate_js('location.href'), html
+        finally:
+            try:
+                w.destroy()
+            except Exception:
+                pass
+
+    sitewatch.browser_fetch = browser_fetch
+    sitewatch.start_background(stop)
 
     def on_closing():
         if state['quitting']:

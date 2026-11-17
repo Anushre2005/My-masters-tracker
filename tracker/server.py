@@ -2,10 +2,11 @@
 import datetime as dt
 import os
 import re
+import threading
 
 from flask import Flask, Response, jsonify, request, send_file, send_from_directory, stream_with_context
 
-from . import ai, db, engine, excel_sync, gre, importer, mobile, notify, results
+from . import ai, db, engine, excel_sync, funding, gre, importer, mobile, notify, results, sitewatch
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
 app = Flask(__name__, static_folder=STATIC)
@@ -18,7 +19,8 @@ HABIT_FIELDS = {'name', 'kind', 'hours_per_week', 'active_from', 'active_until',
 REMINDER_FIELDS = {'title', 'due_at', 'repeat', 'active', 'notes'}
 SETTING_KEYS = {'excel_path', 'digest_time', 'evening_time', 'lead_minutes', 'notifications',
                 'ollama_url', 'ollama_model', 'fee_uplift',
-                'fx_USD', 'fx_GBP', 'fx_EUR', 'fx_SGD', 'fx_AUD', 'fx_CAD', 'fx_CHF'}
+                'fx_USD', 'fx_GBP', 'fx_EUR', 'fx_SGD', 'fx_AUD', 'fx_CAD', 'fx_CHF',
+                'watch_enabled', 'watch_hours', 'watch_notify'}
 
 
 show_window = None  # set by main.py: brings the desktop window to the front
@@ -113,6 +115,9 @@ def api_program_detail(pid):
     return jsonify({**p, 'cost': engine.program_cost(p), 'tasks': tasks,
                     'days_to_submit': (ps - engine.today()).days if ps else None,
                     'curriculum': db.one('SELECT * FROM curriculum WHERE program_id=?', (pid,)),
+                    'official_pages': sitewatch.pages_for(pid), 'page_changes': sitewatch.changes(pid, limit=50),
+                    'funding': funding.for_program(pid), 'funding_statuses': funding.STATUSES, 'funding_checked': funding.CHECKED,
+                    'watch_hours': db.get_setting('watch_hours'),
                     'work_exp_at_submit': round((ps - dt.date(2027, 1, 1)).days / 30.4375, 1) if ps else None})
 
 
@@ -133,6 +138,41 @@ def api_program_costs(pid):
 @app.patch('/api/programs/<pid>')
 def api_program_update(pid):
     db.update_row('programs', 'id', pid, request.json, PROGRAM_FIELDS)
+    return jsonify(ok=True)
+
+
+# ---- official-page watcher + funding ----
+@app.get('/api/watch/status')
+def api_watch_status():
+    return jsonify(unseen=sitewatch.unseen_count(), running=sitewatch._running.locked())
+
+
+@app.get('/api/watch/changes')
+def api_watch_changes():
+    return jsonify(sitewatch.changes(request.args.get('program_id'), unseen_only=request.args.get('unseen') == '1'))
+
+
+@app.post('/api/watch/seen')
+def api_watch_seen():
+    b = request.json or {}
+    sitewatch.mark_seen(b.get('id'), b.get('program_id'))
+    return jsonify(ok=True, unseen=sitewatch.unseen_count())
+
+
+@app.post('/api/watch/check')
+def api_watch_check():
+    b = request.json or {}
+    if sitewatch._running.locked():
+        return jsonify(ok=False, error='A check is already running')
+    threading.Thread(target=sitewatch.check_due, kwargs=dict(force=True, program_id=b.get('program_id'), pause=1.0),
+                     daemon=True).start()
+    return jsonify(ok=True)
+
+
+@app.patch('/api/funding/<pid>/<aid>')
+def api_funding_update(pid, aid):
+    b = request.json or {}
+    funding.set_status(pid, aid, b.get('status'), b.get('note'))
     return jsonify(ok=True)
 
 

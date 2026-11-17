@@ -275,8 +275,10 @@ views.program = async (id) => {
         <div class="card"><h2>My tasks for this programme</h2>
           <ul class="list">${p.tasks.map((t) => `<li><div class="grow ${t.open ? '' : 'done-text'}">${esc(t.title)}<div class="meta">due ${fmtDate(t.due)} · ${esc(t.status)}</div></div>${t.open ? daysPill(t.days_left) : '<span class="pill ok">Done</span>'}</li>`).join('')}</ul></div>
       </div>
-    </div>`;
+    </div>
+    <div id="p-extras"></div>`;
   $('#back').onclick = () => go('programs');
+  if (window.renderProgramExtras) renderProgramExtras(p);
   $('#cu-edit').onclick = () => { $('#cu-view').style.display = 'none'; $('#cu-form').style.display = 'block'; };
   $('#cu-save').onclick = async () => {
     const body = { checked: isoToday() }; document.querySelectorAll('[data-cu]').forEach((t) => body[t.dataset.cu] = t.value);
@@ -412,6 +414,9 @@ views.settings = async () => {
       ${f('ollama_url', 'Ollama URL')}
       ${f('ollama_model', 'Ollama model')}
       ${f('excel_path', 'Excel tracker path', 'text', 'size="70"')}
+      <label>Watch official pages</label><div><input data-k="watch_enabled" type="checkbox" ${s.watch_enabled !== '0' ? 'checked' : ''}> on &nbsp;
+        <input data-k="watch_notify" type="checkbox" ${s.watch_notify !== '0' ? 'checked' : ''}> toast when a page changes</div>
+      ${f('watch_hours', 'Re-check pages every (hours)', 'number', 'min="1" max="168"')}
     </div></div>
     <div class="card" style="margin-top:16px"><h2>Exchange rates for ₹ costs</h2>
       <p class="meta">₹ per 1 unit of each currency (planning rates from your Excel Budget tab, Oct 2026). Update them with live rates when you compare offers.</p>
