@@ -144,7 +144,7 @@ def answer(t):
     _check(t)
     b = request.get_json(silent=True) or {}
     word = str(b.get('word', ''))[:60]
-    gre.vocab_answer(word, bool(b.get('correct')))
+    gre.vocab_answer(word, bool(b.get('correct')), card=True)
     return jsonify(ok=True)
 
 

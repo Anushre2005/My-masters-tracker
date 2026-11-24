@@ -375,7 +375,7 @@ def api_gre_vocab_eod_answer():
 @app.post('/api/gre/vocab')
 def api_gre_vocab_answer():
     b = request.json
-    gre.vocab_answer(b['word'], bool(b.get('correct')))
+    gre.vocab_answer(b['word'], bool(b.get('correct')), card=True)
     return jsonify(ok=True)
 
 
@@ -499,6 +499,26 @@ def api_gre_course_try(ch, c):
     if not _known_chapter(ch):
         return jsonify({'error': 'unknown chapter'}), 404
     return jsonify(gre.try_question(ch, c))
+
+
+@app.get('/api/gre/course/practice/<ch>/<int:c>')
+def api_gre_course_practice(ch, c):
+    if not _known_chapter(ch):
+        return jsonify({'error': 'unknown chapter'}), 404
+    return jsonify(gre.practice_set(ch, c))
+
+
+@app.post('/api/gre/course/practice/<ch>/<int:c>')
+def api_gre_course_practice_answer(ch, c):
+    if not _known_chapter(ch):
+        return jsonify({'error': 'unknown chapter'}), 404
+    return jsonify(gre.practice_answer(ch, c, request.json or {}))
+
+
+@app.post('/api/gre/vocab/sentence/flag')
+def api_gre_vocab_sentence_flag():
+    b = request.json or {}
+    return jsonify(gre.flag_sentence(str(b.get('word', '')), str(b.get('sentence', ''))))
 
 
 @app.get('/api/gre/course/test')

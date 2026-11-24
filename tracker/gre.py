@@ -46,11 +46,11 @@ EXTRA_COLS = {
     'gre_errors': {'kind': "TEXT DEFAULT 'Unsorted'", 'redo_on': 'TEXT', 'redo_count': 'INTEGER DEFAULT 0', 'detail': 'TEXT', 'secs': 'INTEGER'},
     'gre_essays': {'ai_score': 'REAL', 'ai_feedback': 'TEXT', 'ai_at': 'TEXT'},
     'gre_vocab_queue': {'missed_at': 'TEXT', 'eod_at': 'TEXT'},
-    'gre_vocab': {'first_seen': 'TEXT'},
+    'gre_vocab': {'first_seen': 'TEXT', 'last_card': 'TEXT'},  # last_card: last day the word was answered as a flashcard
 }
 
 DEFAULTS = {'gre_start': '2026-10-12', 'gre_days': 'Mon,Tue,Wed,Thu,Fri,Sat', 'gre_time': '20:00', 'gre_notify': '1',
-            'gre_target_q': '165', 'gre_target_v': '155'}
+            'gre_target_q': '165', 'gre_target_v': '155', 'gre_daily_cards': '30'}
 SETTING_KEYS = set(DEFAULTS)
 
 # mistake categories (the error log's "why did I miss it")
@@ -446,7 +446,8 @@ def redo_error(eid, correct):
 
 
 # ---------------------------------------------------------------- vocab (Leitner boxes)
-def vocab_answer(word, correct):
+def vocab_answer(word, correct, card=False):
+    """card=True for the flashcard deck (desktop or phone): counts towards today's card limit."""
     ensure()
     if word not in gre_vocab.DEFS:
         return
@@ -456,6 +457,8 @@ def vocab_answer(word, correct):
     db.execute('INSERT INTO gre_vocab(word,box,due,seen,correct,first_seen) VALUES (?,?,?,?,?,?) ON CONFLICT(word) DO UPDATE SET '
                'box=excluded.box, due=excluded.due, seen=excluded.seen, correct=excluded.correct',
                (word, box, due, r['seen'] + 1, r['correct'] + (1 if correct else 0), today().isoformat()))
+    if card:
+        db.execute('UPDATE gre_vocab SET last_card=? WHERE word=?', (today().isoformat(), word))
     if not correct:
         queue_add(word)
 
@@ -593,13 +596,26 @@ def vocab_state():
         out_groups.append({'group': g, 'unlocked': unlocked, 'words': ws,
                            'mastered': sum(1 for x in ws if x['box'] >= 4), 'seen': sum(1 for x in ws if x['box'] > 0)})
     boxes = {b: sum(1 for r in rows.values() if r['box'] == b) for b in range(1, 6)}
-    # unseen words first within the due list, then lowest box; unseen words limited by today's new-word budget
-    due.sort(key=lambda x: (x['box'] != 0, x['box'], x['group']))
+    # today's deck: at most gre_daily_cards cards a day (default 30), counting cards already answered today.
+    # About half the slots go to due reviews (weakest box first), half to new words (within the new-word budget);
+    # if one side runs short the other fills the gap. Everything else waits for the next days.
     budget = new_word_budget()
-    new = [x for x in due if x['box'] == 0]
-    due = new[:budget['left']] + [x for x in due if x['box'] != 0]
-    budget['held'] = len(new) - min(len(new), budget['left'])
-    return {'groups': out_groups, 'due': due, 'boxes': boxes, 'unlocked': groups, 'total': len(gre_vocab.DEFS), 'budget': budget}
+    new = sorted([x for x in due if x['box'] == 0], key=lambda x: x['group'])[:budget['left']]
+    rev = sorted([x for x in due if x['box'] != 0], key=lambda x: (x['box'], x['group']))
+    try:
+        cap = max(1, int(setting('gre_daily_cards')))
+    except ValueError:
+        cap = 30
+    # cards answered today (+ words first met today before this counter existed)
+    done = db.one('SELECT COUNT(*) n FROM gre_vocab WHERE last_card=? OR (last_card IS NULL AND first_seen=?)', (t0, t0))['n']
+    left = max(0, cap - done)
+    n_new = min(len(new), max(left // 2, left - len(rev)))
+    n_rev = min(len(rev), left - n_new)
+    n_new = min(len(new), left - n_rev)
+    deck = new[:n_new] + rev[:n_rev]
+    budget.update(held=sum(1 for x in due if x['box'] == 0) - n_new, daily_cap=cap, done_today=done,
+                  waiting=len(due) - len(deck))
+    return {'groups': out_groups, 'due': deck, 'boxes': boxes, 'unlocked': groups, 'total': len(gre_vocab.DEFS), 'budget': budget}
 
 
 # ---------------------------------------------------------------- day payload
@@ -767,6 +783,9 @@ def save_test(b):
                      (b.get('kind'), b.get('key'), b.get('title'), now, sum(1 for i in items if i.get('correct')), len(items),
                       b.get('seconds'), b.get('minutes'), json.dumps(items), subject))
     for it in items:
+        if it.get('word') and it.get('topic') == 'vocab':  # your-word question: vocab boxes + missed-words queue
+            vocab_answer(str(it['word']), bool(it.get('correct')))
+            continue
         if not it.get('correct'):
             ch, c = it.get('chapter'), it.get('concept')
             m = mod_for(ch)
@@ -930,6 +949,21 @@ def course_test(kind, key=None, level='mixed', subject='quant'):
     m = mod(subject)
     seen = _seen(subject)
     extra = {'seen': seen} if subject == 'verbal' else {}
+    if kind in ('chapter', 'unit') and subject == 'verbal':
+        # leave out what you just practised and near-copies of the lesson's worked examples
+        avoid = {k for k in _practice_seen() if not k.startswith('v:')} | gre_verbal.EXAMPLE_LIKE
+        t = m.build_test(kind, key, avoid=avoid, **extra)
+        if kind == 'chapter' and key in VOCAB_CHAPTERS:
+            rng = random.Random()
+            voc = _test_vocab(key, avoid, 3, rng)
+            if voc:  # swap the most-repeated hand-written questions for your-word questions in new sentences
+                qs = t['questions']
+                order = sorted(range(len(qs)), key=lambda i: (qs[i].get('gen') not in avoid, rng.random()))
+                drop = set(order[:len(voc)])
+                qs = [q for i, q in enumerate(qs) if i not in drop] + voc
+                qs.sort(key=lambda q: q.get('diff', 2))
+                t['questions'] = qs
+        return t
     if kind in ('chapter', 'unit'):
         return m.build_test(kind, key, **extra)
     if kind in ('section1', 'section2'):
@@ -948,6 +982,17 @@ def course_test(kind, key=None, level='mixed', subject='quant'):
 def course_lesson(ch):
     ensure()
     m = mod_for(ch)
+    if ch in VOCAB_CHAPTERS:  # start writing your-word sentences for this chapter's first clue style while you read the lesson
+        try:
+            from . import vocab_ctx
+            done = _lessons().get(ch, {}).get('done', set())
+            nxt = next((i for i in range(len(m.LESSONS[ch])) if i not in done), 0)
+            style = CONCEPT_STYLE.get((ch, nxt)) or next((s for (k, _), s in CONCEPT_STYLE.items() if k == ch), None)
+            words = [w for w in studied_words() if not vocab_ctx.styled_sentences(w, style)]
+            if words:
+                vocab_ctx.prepare_async(words[:12], style)
+        except Exception as e:
+            print('practice sentence prep failed:', e)
     return {**m.lesson(ch), 'subject': subject_of(ch), 'done': sorted(_lessons().get(ch, {}).get('done', ())),
             'tests': [_pct(t) for t in db.query("SELECT score, total FROM gre_tests WHERE kind='chapter' AND key=? ORDER BY at", (ch,))]}
 
@@ -956,6 +1001,151 @@ def try_question(ch, c):
     if ch in gre_verbal.LESSONS:
         return gre_verbal.try_question(ch, c, _seen('verbal'))
     return gre_course.try_question(ch, c)
+
+
+# ---------------------------------------------------------------- 10-question practice set after each lesson concept
+PRACTICE_N = 10
+VOCAB_CHAPTERS = {'tc_basic', 'tc_shift', 'tc_double', 'tc_triple'}  # text-completion chapters get questions on your own words
+CONCEPT_STYLE = {('tc_basic', 1): 'restate', ('tc_basic', 2): 'cause', ('tc_shift', 0): 'contrast',
+                 ('tc_shift', 1): 'time', ('tc_shift', 2): 'reversal'}  # the kind of clue each concept teaches
+
+
+def studied_words():
+    """Words from earlier sessions, missed-queue words first, then the shakiest ones (low Leitner box)."""
+    ensure()
+    t = today().isoformat()
+    queue = [r['word'] for r in db.query('SELECT word FROM gre_vocab_queue WHERE cleared IS NULL AND added < ? ORDER BY added', (t,))]
+    rest = [r['word'] for r in db.query("SELECT word FROM gre_vocab WHERE seen > 0 AND COALESCE(first_seen, '') < ? ORDER BY box, due", (t,))]
+    words = list(dict.fromkeys(queue + rest))
+    if not words:  # nothing practised yet: the groups introduced before the current class
+        cur = status()['current'] or 1
+        for g in unlocked_groups(cur - 1):
+            words += gre_vocab.GROUPS.get(g, [])
+    return [w for w in words if w in gre_vocab.DEFS]
+
+
+def _vocab_tc(word, s, rng):
+    from . import vocab_ctx
+    choices = vocab_ctx.distractors(word, rng, list(gre_vocab.DEFS)) + [word]
+    rng.shuffle(choices)
+    return {'topic': 'vocab', 'kind': 'mc', 'word': word, 'q': s['sentence'], 'c': choices, 'a': choices.index(word), 'diff': 2,
+            'x': f"{word}: {gre_vocab.DEFS[word]}. {s['clue'] or ''}".strip(), 'chapter': 'vocab', 'ctitle': 'Vocabulary in context',
+            'cname': 'A word from your earlier sessions', 'format': 'tc'}
+
+
+def practice_set(ch, c, n=PRACTICE_N):
+    """n questions for one lesson concept. Quant: fresh generated questions. Verbal: the concept's hand-written questions
+    (unseen first); in text-completion chapters about half are sentences built on words from your earlier sessions, using
+    the clue type the concept teaches. Missing sentences are written in the background for the next set."""
+    from . import vocab_ctx
+    rng = random.Random()
+    if ch not in gre_verbal.LESSONS:
+        qs, texts = [], set()
+        for _ in range(n * 3):
+            q = gre_course.try_question(ch, c)
+            if q['q'] not in texts:
+                texts.add(q['q'])
+                qs.append(q)
+            if len(qs) >= n:
+                break
+        return {'questions': qs, 'vocab': 0, 'missing': 0, 'preparing': False, 'style': None}
+    style = CONCEPT_STYLE.get((ch, c))
+    vocab_qs, missing = [], []
+    if ch in VOCAB_CHAPTERS:
+        words = studied_words()
+        head, tail = words[:10], words[10:]  # missed-queue / weakest words always get a chance, the rest rotate
+        rng.shuffle(tail)
+        for w in head + tail:
+            ss = vocab_ctx.styled_sentences(w, style)
+            if not ss:
+                missing.append(w)
+            elif len(vocab_qs) < n // 2:
+                vocab_qs.append(_vocab_tc(w, rng.choice(ss), rng))
+        if missing:
+            vocab_ctx.prepare_async(missing[:12], style)
+    seen = _seen('verbal')
+    mix = gre_verbal.DIFF_W['mixed']
+    want = n - len(vocab_qs)
+    skip = gre_verbal.EXCLUDED | gre_verbal.EXAMPLE_LIKE  # bad ones, and near-copies of the worked example shown above
+    pool = [x for x in gre_verbal.QS if x['chapter'] == ch and x['concept'] == c and x['id'] not in skip]
+    bank = gre_verbal._draw(rng, pool, want, seen, mix)
+    if len(bank) < want:  # top up from the rest of the chapter
+        ids = {x['id'] for x in bank}
+        rest = [x for x in gre_verbal.QS if x['chapter'] == ch and x['id'] not in ids and x['id'] not in skip]
+        bank += gre_verbal._draw(rng, rest, want - len(bank), seen, mix)
+    bank.sort(key=lambda q: (q['diff'], q.get('pid') or ''))
+    bank = [gre_verbal.serve(q, rng) for q in bank]
+    qs = []  # easy hand-written ones first, then alternate with your-word questions
+    while bank or vocab_qs:
+        if bank:
+            qs.append(bank.pop(0))
+        if vocab_qs:
+            qs.append(vocab_qs.pop(0))
+    return {'questions': qs, 'vocab': sum(1 for q in qs if q.get('word')), 'missing': min(len(missing), 12),  # one background batch
+            'preparing': bool(missing) and vocab_ctx._state['running'], 'style': style}
+
+
+def flag_sentence(word, sentence):
+    """A vocab sentence the student reported as wrong or unclear: never served again (ok = -1)."""
+    from . import vocab_ctx
+    vocab_ctx.ensure()
+    db.execute('UPDATE gre_vocab_ctx SET ok=-1 WHERE word=? AND sentence=?', (word, sentence))
+    return {'ok': True}
+
+
+PRACTICE_SCHEMA = 'CREATE TABLE IF NOT EXISTS gre_practice_seen (key TEXT PRIMARY KEY, at TEXT)'
+TEST_AVOID_DAYS = 21  # questions practised this recently are kept out of chapter / unit tests
+
+
+def _practice_seen(days=TEST_AVOID_DAYS):
+    """Keys of practice questions answered recently: bank ids, and 'v:<sentence>' for your-word sentences."""
+    db.execute(PRACTICE_SCHEMA)
+    since = (today() - dt.timedelta(days=days)).isoformat()
+    return {r['key'] for r in db.query('SELECT key FROM gre_practice_seen WHERE at >= ?', (since,))}
+
+
+def _test_vocab(ch, avoided, n, rng):
+    """Up to n your-word questions for a test, in sentences you have NOT met in practice. Words from questions that were
+    left out because you just practised them come first (same word, new question), then your studied words."""
+    from . import vocab_ctx
+    seen = _practice_seen()
+    first = []
+    for q in gre_verbal.QS:  # answer words of the practised single-blank questions in this chapter
+        if q['id'] in avoided and q['chapter'] == ch and q['kind'] == 'tc' and len(q['c']) == 1:
+            w = q['c'][0][q['a'][0]]
+            if w in gre_vocab.DEFS:
+                first.append(w)
+    styles = [s for (k, _), s in CONCEPT_STYLE.items() if k == ch] or [None]
+    out, used = [], set()
+    for w in list(dict.fromkeys(first)) + studied_words():
+        if len(out) >= n or w in used:
+            continue
+        fresh = [s for s in vocab_ctx.sentences(w) if 'v:' + s['sentence'] not in seen]
+        pref = [s for s in fresh if vocab_ctx.style_of(s['sentence']) & set(styles)] or fresh
+        if pref:
+            q = _vocab_tc(w, rng.choice(pref), rng)
+            q['cname'] = 'Same word, new sentence' if w in first else q['cname']
+            out.append(q)
+            used.add(w)
+    return out
+
+
+def practice_answer(ch, c, b):
+    """One practice answer: words feed the vocab boxes and missed-words queue; wrong course questions go to the error log.
+    Every answered question is remembered so the chapter test does not repeat it."""
+    db.execute(PRACTICE_SCHEMA)
+    key = str(b['gen']) if b.get('gen') and not b.get('word') else ('v:' + str(b.get('q') or '')) if b.get('word') else None
+    if key:
+        db.execute('INSERT INTO gre_practice_seen(key, at) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET at=excluded.at',
+                   (key, today().isoformat()))
+    correct = bool(b.get('correct'))
+    if b.get('word'):
+        vocab_answer(str(b['word']), correct)
+    elif not correct and b.get('q'):
+        m = mod_for(ch)
+        add_error(status()['current'], f"{m.title(ch)} · {m.concept_name(ch, c)}", 'Lesson practice', str(b['q'])[:2000],
+                  str(b.get('answer') or '')[:500], str(b.get('x') or '')[:1000])
+    return {'ok': True}
 
 
 def day_course(n):
@@ -1047,7 +1237,7 @@ def speed_stats():
     for t in db.query('SELECT detail FROM gre_tests'):
         for it in json.loads(t['detail'] or '[]'):
             ch, s = it.get('chapter'), it.get('secs')
-            if not ch or not s:
+            if not ch or not s or ch == 'vocab':  # your-word questions are not a course chapter
                 continue
             x = rows.setdefault(ch, {'n': 0, 'secs': 0, 'slow': 0, 'slow_right': 0, 'fast_right': 0})
             x['n'] += 1

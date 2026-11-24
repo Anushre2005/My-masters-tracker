@@ -715,6 +715,31 @@ def _add_reading():
 _add_reading()
 
 
+def _add_weak_focus():
+    """Added 2026-11-23 after a Kaplan practice test (RC 29%, Short Verbal 62%, Arithmetic 70%): every normal class day
+    in weeks 1-15 gets extra Reading Comprehension and Short Verbal drills (+30 min); Tue and Fri add Arithmetic."""
+    k = 0
+    for i, d in enumerate(PLAN):
+        wd, wk = i % DAYS_PER_WEEK, i // DAYS_PER_WEEK + 1  # day/week/weekday are only assigned later by _assign
+        if d['mock'] or not d['minutes'] or wd == 5 or wk > 15:
+            continue
+        a = (k * 2) % 99 + 1
+        d['drill']['RC'] = max(d['drill'].get('RC', 0), 2)
+        d['drill']['TC'] = max(d['drill'].get('TC', 0), 3)
+        d['drill']['SE'] = max(d['drill'].get('SE', 0), 2)
+        d['read'].append(rc99(a, a + 1))
+        d['notes'].append('Weak-spot focus (Kaplan test, Nov 2026): do the RC passages untimed first, writing a one-line summary per paragraph, '
+                          'then timed. For every miss write why the right answer is supported and why yours is too extreme / out of scope. '
+                          'For TC/SE underline the clue word before you look at the choices.')
+        if wd in (1, 4):
+            d['read'].append(q1014('arithmetic (percents, ratios, averages, exponents)'))
+        d['minutes'] += 30
+        k += 1
+
+
+_add_weak_focus()
+
+
 def _assign():
     """Give each day its number/week, Magoosh practice ranges (sequential per type) and resolve lesson videos."""
     ptr = {k: 0 for k in PTYPES}

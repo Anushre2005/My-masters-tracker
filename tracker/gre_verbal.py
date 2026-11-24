@@ -13,6 +13,7 @@ Question kinds: 'mc' (one answer), 'ma' (select all / select two), 'tc' (multi-b
 c = one column of choices per blank, a = the right index in each column).
 """
 import random
+import re
 
 from . import gre_plan
 
@@ -890,14 +891,40 @@ def _draw_passages(r, n, seen, mix, concepts=None):
 EXCLUDED = set()  # question ids reported as bad (filled by gre.load_exclusions)
 
 
-def pick(r, ch, n, seen=None, level='mixed', concepts=None):
+def _words(s):
+    return set(re.findall(r'[a-z]{4,}', (s or '').lower()))
+
+
+def _example_like():
+    """Bank questions that are near-copies of a lesson's worked example: you have already seen them in the lesson."""
+    out = set()
+    for ch, concepts in LESSONS.items():
+        exs = [_words(c['ex']['q']) for c in concepts]
+        for q in QS:
+            if q['chapter'] == ch:
+                w = _words(q['q'])
+                if any(w and e and len(w & e) / len(w | e) >= 0.5 for e in exs):
+                    out.add(q['id'])
+    return out
+
+
+EXAMPLE_LIKE = _example_like()
+
+
+def pick(r, ch, n, seen=None, level='mixed', concepts=None, avoid=None):
+    """avoid: question ids to leave out (seen in today's practice / the lesson) unless the chapter runs out of others."""
     seen = seen or {}
+    avoid = avoid or set()
     mix = DIFF_W.get(level, DIFF_W['mixed'])
     if ch == 'rc':
         return _draw_passages(r, n, seen, mix, concepts)
     pool = [x for x in QS if x['chapter'] == ch and (concepts is None or x['concept'] in concepts) and x['id'] not in EXCLUDED] or \
         [x for x in QS if x['chapter'] == ch and x['id'] not in EXCLUDED] or [x for x in QS if x['chapter'] == ch]
-    return _draw(r, pool, n, seen, mix)
+    fresh = [x for x in pool if x['id'] not in avoid]
+    out = _draw(r, fresh, n, seen, mix)
+    if len(out) < n:  # not enough unseen ones: reuse the ones seen longest ago (seen order is up to the caller)
+        out += _draw(r, [x for x in pool if x['id'] in avoid], n - len(out), seen, mix)
+    return out
 
 
 def try_question(ch, concept, seen=None, seed=None):
@@ -914,13 +941,13 @@ def _order(items):
     return sorted(items, key=lambda it: (rank[it['chapter']], it.get('pid') or '', pos[it['id']]))
 
 
-def build_test(kind, key=None, level='mixed', chapters=None, concepts=None, seen=None, seed=None):
+def build_test(kind, key=None, level='mixed', chapters=None, concepts=None, seen=None, seed=None, avoid=None):
     """kind: chapter (key = chapter), unit (key = unit), section1/section2 (chapters = pool), drill (concepts = [(ch, c), ...])."""
     r = random.Random(seed)
     seen = seen or {}
     n, minutes = TEST_SPEC[kind]
     if kind == 'chapter':
-        qs = pick(r, key, n, seen, level)
+        qs = pick(r, key, n, seen, level, avoid=avoid)
         qs.sort(key=lambda q: (q['diff'], q.get('pid') or ''))
         return dict(kind=kind, key=key, subject='verbal', title=f'Chapter test · {title(key)}', minutes=minutes, questions=[serve(q, r) for q in qs])
     if kind == 'unit':
@@ -929,7 +956,7 @@ def build_test(kind, key=None, level='mixed', chapters=None, concepts=None, seen
             per = {'rc': 10, 'cr': 5, 'cr2': 5}
         else:
             per = {c: n // len(chs) for c in chs}
-        qs = [q for ch in chs for q in pick(r, ch, per[ch], seen, level)]
+        qs = [q for ch in chs for q in pick(r, ch, per[ch], seen, level, avoid=avoid)]
         return dict(kind=kind, key=key, subject='verbal', title=f'{UNIT_BY_KEY[key]["title"]} - combined test', minutes=minutes, questions=[serve(q, r) for q in _order(qs)])
     if kind in ('section1', 'section2'):
         pool = [c for c in (chapters or CHAPTERS) if c in CH_DAY]

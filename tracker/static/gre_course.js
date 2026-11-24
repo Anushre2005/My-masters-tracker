@@ -190,7 +190,7 @@ async function openLesson(ch, ci = null) {
   course.view = 'lesson';
   showCourse();
 }
-function resetConcept() { Object.assign(course.lesson, { shown: 0, q: null, r: null, tries: 0, solved: false, revealed: false }); }
+function resetConcept() { Object.assign(course.lesson, { shown: 0, q: null, r: null, tries: 0, solved: false, revealed: false, set: null }); }
 
 function drawLesson() {
   const L = course.lesson;
@@ -212,10 +212,7 @@ function drawLesson() {
           ${allShown ? `<div class="explain ok"><b>Answer:</b> ${esc(ex.a)}</div>`
             : `<div class="row"><button class="small" id="ls-step">${L.shown ? 'Next step' : 'Show the first step'}</button>
                <span class="meta">Try each step yourself before you reveal it.</span><span style="flex:1"></span><button class="ghost small" id="ls-all">Show all steps</button></div>`}</div>
-        ${allShown ? `<div class="card" style="margin-top:12px"><div class="row"><h3 style="margin:0">Your turn</h3><span style="flex:1"></span>
-            <span class="meta">${L.q ? DIFF[L.q.diff] : ''}</span></div>
-          <div id="ls-q">${L.q ? qBody(L.q, L.r, { locked: L.solved || L.revealed, reveal: L.solved || L.revealed }) : '<div class="meta">Loading…</div>'}</div>
-          ${L.q ? tryFeedback(L, c) : ''}</div>` : ''}`}</div></div>`;
+        ${allShown ? practiceCard(L, c) : ''}`}</div></div>`;
   $('#ls-back').onclick = courseHome;
   body().querySelectorAll('[data-ci]').forEach((li) => li.onclick = () => {
     if (li.dataset.ci === 'end') L.finished = true; else { L.finished = false; L.ci = +li.dataset.ci; }
@@ -224,38 +221,102 @@ function drawLesson() {
   if (L.finished) { $('#ls-test').onclick = () => startTest('chapter', L.chapter); return; }
   const st = $('#ls-step'); if (st) st.onclick = () => { L.shown++; drawLesson(); };
   const sa = $('#ls-all'); if (sa) sa.onclick = () => { L.shown = ex.steps.length; drawLesson(); };
-  if (allShown && !L.q) return loadTry();
-  if (!L.q) return;
-  bindQ($('#ls-q'), L.q, () => L.r, (v) => { L.r = v; const ck = $('#ls-check'); if (ck) ck.disabled = !answered(L.q, v); }, drawLesson);
-  const ck = $('#ls-check'); if (ck) ck.onclick = async () => {
-    if (isRight(L.q, L.r)) {
-      L.solved = true; L.done.add(L.ci);
-      await post('/api/gre/course/lesson/' + L.chapter, { concept: L.ci });
-    } else if (++L.tries >= 2) L.revealed = true;
-    drawLesson();
-  };
-  const ne = $('#ne-in'); if (ne && ck) ne.onkeydown = (e) => { if (e.key === 'Enter' && hasAnswer(ne.value)) ck.click(); };
-  const more = $('#ls-more'); if (more) more.onclick = loadTry;
   const nx = $('#ls-next'); if (nx) nx.onclick = () => {
     if (L.ci + 1 < L.concepts.length) L.ci++; else L.finished = true;
     resetConcept(); drawLesson(); window.scrollTo(0, 0);
   };
+  const again = $('#ls-again'); if (again) again.onclick = loadSet;
+  if (allShown && !L.set) return loadSet();
+  if (!L.q || !L.set || L.set.over) return;
+  bindQ($('#ls-q'), L.q, () => L.r, (v) => { L.r = v; const ck = $('#ls-check'); if (ck) ck.disabled = !answered(L.q, v); }, drawLesson);
+  const ck = $('#ls-check'); if (ck) ck.onclick = async () => {
+    const right = isRight(L.q, L.r);
+    if (right) L.solved = true; else if (++L.tries >= 2) L.revealed = true;
+    if (L.solved || L.revealed) await recordPractice(L, right);
+    drawLesson();
+  };
+  const ne = $('#ne-in'); if (ne && ck) ne.onkeydown = (e) => { if (e.key === 'Enter' && hasAnswer(ne.value)) ck.click(); };
+  const nq = $('#ls-nextq'); if (nq) nq.onclick = () => nextPractice(L);
+  const fl = $('#ls-flag'); if (fl) fl.onclick = async () => {
+    if (L.q.flagged) return;
+    await post('/api/gre/vocab/sentence/flag', { word: L.q.word, sentence: L.q.q });
+    L.q.flagged = true; toast('Thanks - that sentence will not be used again.'); drawLesson();
+  };
 }
-function tryFeedback(L, c) {
-  const last = L.ci + 1 >= L.concepts.length;
-  const nextBtn = (ghost) => `<button class="${ghost ? 'ghost ' : ''}small" id="ls-next">${last ? 'Finish lesson →' : 'Next concept →'}</button>`;
-  if (L.solved) return `<div class="explain ok"><b>Correct!</b> ${esc(L.q.x)}</div>
-    <div class="row" style="margin-top:10px"><button class="ghost small" id="ls-more">Another one like this</button><span style="flex:1"></span>${nextBtn(false)}</div>`;
+// ---------------------------------------------------------------- 10-question practice set for each concept
+const PASS = 0.7; // share of the set answered right that ticks the concept as learnt
+function practiceNote(S) {
+  const a = S.vocab ? `${S.vocab} of these use words from your earlier sessions${S.style ? ', with the kind of clue this concept teaches' : ''}.` : '';
+  const b = S.missing ? ` ${S.missing} more of your words are being written into new sentences in the background - press "New set" later to get them.` : '';
+  return a + b;
+}
+function practiceCard(L, c) {
+  const S = L.set;
+  if (!S) return `<div class="card" style="margin-top:12px"><h3>Practice</h3><div class="meta">Building your practice set…</div></div>`;
+  const n = S.qs.length; const right = S.res.filter(Boolean).length;
+  const dots = S.qs.map((_, i) => `<span class="pdot ${S.res[i] === true ? 'ok' : S.res[i] === false ? 'bad' : i === S.i && !S.over ? 'cur' : ''}"></span>`).join('');
+  const note = practiceNote(S);
+  const nextConcept = L.ci + 1 >= L.concepts.length ? 'Finish lesson →' : 'Next concept →';
+  if (S.over) {
+    const pass = n && right / n >= PASS;
+    return `<div class="card" style="margin-top:12px"><h3>Practice result: ${right} / ${n}</h3>
+      <div class="pdots">${dots}</div>
+      <div class="explain ${pass ? 'ok' : 'warn'}" style="margin-top:10px">${pass ? 'Concept learnt ✓ - well done.'
+        : `Below ${Math.round(PASS * 100)}% - re-read the concept and the worked example above, then try a new set.`}
+        ${S.res.some((x) => x === false) ? ' Course questions you got wrong are in your Error log, and missed words joined your missed-words queue.' : ''}</div>
+      ${note ? `<div class="meta" style="margin-top:6px">${esc(note)}</div>` : ''}
+      <div class="row" style="margin-top:10px"><button class="ghost small" id="ls-again">New set</button><span style="flex:1"></span>
+        <button class="small" id="ls-next">${nextConcept}</button></div></div>`;
+  }
+  const q = L.q;
+  return `<div class="card" style="margin-top:12px"><div class="row"><h3 style="margin:0">Practice · question ${S.i + 1} of ${n}</h3><span style="flex:1"></span>
+      <span class="meta">${q.word ? 'Word from an earlier session · ' : ''}${DIFF[q.diff] || ''}</span></div>
+    <div class="pdots" style="margin:6px 0 10px">${dots}</div>
+    <div id="ls-q">${qBody(q, L.r, { locked: L.solved || L.revealed, reveal: L.solved || L.revealed })}</div>
+    ${practiceFeedback(L, c)}
+    ${S.i === 0 && note ? `<div class="meta" style="margin-top:8px">${esc(note)}</div>` : ''}</div>`;
+}
+function practiceFeedback(L, c) {
+  const S = L.set; const last = S.i + 1 >= S.qs.length;
+  const nextQ = `<button class="small" id="ls-nextq">${last ? 'See my result' : 'Next question →'}</button>`;
+  const skip = `<button class="ghost small" id="ls-next">${L.ci + 1 >= L.concepts.length ? 'Finish lesson' : 'Skip to next concept'}</button>`
+    + (L.q.word ? ` <button class="ghost small" id="ls-flag" title="The sentence is wrong, unclear or has two possible answers">${L.q.flagged ? 'Reported ✓' : 'Report sentence'}</button>` : '');
+  if (L.solved) return `<div class="explain ok"><b>Correct!</b> ${esc(L.q.x)}</div><div class="row" style="margin-top:10px">${skip}<span style="flex:1"></span>${nextQ}</div>`;
   if (L.revealed) return `<div class="explain bad"><b>Here is how to do it.</b> The answer is <b>${esc(rightText(L.q))}</b>. ${esc(L.q.x)}</div>
-    <div class="row" style="margin-top:10px"><button class="small" id="ls-more">Try another one like this</button><span style="flex:1"></span>${nextBtn(true)}</div>`;
-  return `${L.tries ? `<div class="explain warn"><b>Not quite - try once more.</b> Hint: ${esc(c.hint)}</div>` : ''}
+    <div class="row" style="margin-top:10px">${skip}<span style="flex:1"></span>${nextQ}</div>`;
+  const hint = L.q.word ? 'Find the clue in the sentence, predict your own word, then match it to a word you learnt earlier.' : c.hint;
+  return `${L.tries ? `<div class="explain warn"><b>Not quite - try once more.</b> Hint: ${esc(hint)}</div>` : ''}
     <div class="row" style="margin-top:10px"><button id="ls-check" ${answered(L.q, L.r) ? '' : 'disabled'}>Check answer</button>
     <span class="meta">${L.tries ? 'Second try - after this I will show you the solution.' : 'Two tries, with a hint after the first.'}</span></div>`;
 }
-async function loadTry() {
+async function loadSet() {
   const L = course.lesson;
-  const q = await api(`/api/gre/course/try/${L.chapter}/${L.ci}`);
-  Object.assign(L, { q, r: null, tries: 0, solved: false, revealed: false });
+  const s = await api(`/api/gre/course/practice/${L.chapter}/${L.ci}`);
+  if (!s || s.error || !s.questions || !s.questions.length) { toast((s && s.error) || 'No practice questions for this concept.'); return; }
+  L.set = { qs: s.questions, i: 0, res: [], vocab: s.vocab, missing: s.missing, style: s.style, over: false };
+  Object.assign(L, { q: s.questions[0], r: null, tries: 0, solved: false, revealed: false });
+  drawLesson();
+}
+async function recordPractice(L, right) {
+  const S = L.set; const q = L.q;
+  if (S.res[S.i] !== undefined) return;
+  S.res[S.i] = right;
+  await post(`/api/gre/course/practice/${L.chapter}/${L.ci}`, { correct: right, word: q.word || null, gen: q.gen || null,
+    q: q.passage ? `${q.ptitle || 'Passage'}: ${q.q}` : q.q, answer: rightText(q), x: q.x });
+}
+async function nextPractice(L) {
+  const S = L.set;
+  if (S.i + 1 < S.qs.length) {
+    S.i++;
+    Object.assign(L, { q: S.qs[S.i], r: null, tries: 0, solved: false, revealed: false });
+    drawLesson(); window.scrollTo(0, document.body.scrollHeight);
+    return;
+  }
+  S.over = true;
+  if (S.res.filter(Boolean).length / S.qs.length >= PASS) {
+    L.done.add(L.ci);
+    await post('/api/gre/course/lesson/' + L.chapter, { concept: L.ci });
+  }
   drawLesson();
 }
 function lessonEnd(L) {

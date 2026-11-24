@@ -453,7 +453,7 @@ async function greVocab() {
   body().innerHTML = `<div class="grid g2"><div class="card">${warming
       ? `<h2>Warm-up: missed words <span class="pill bad">${wu.qs.length - wu.i} left</span></h2><div id="wu"></div>`
       : `<h2>Flashcards due <span class="pill warn">${v.due.length}</span></h2>${done}
-        ${v.budget && v.budget.held ? `<div class="meta" style="margin-bottom:8px">New words today: ${v.budget.cap} (your missed-words queue has ${v.budget.queue} words, so fewer new words until it shrinks). ${v.budget.held} new words wait for the next days.</div>` : ''}
+        ${v.budget && v.budget.daily_cap ? `<div class="meta" style="margin-bottom:8px">Today's limit: ${v.budget.daily_cap} cards (${v.budget.done_today} done so far) - about half reviews, half new words.${v.budget.waiting ? ` ${v.budget.waiting} more cards wait for the next days.` : ''}${v.budget.cap < 30 ? ` Fewer new words while your missed-words queue has ${v.budget.queue} words.` : ''}</div>` : ''}
         ${wu.results.length && gre.day ? `<div style="margin-bottom:8px"><button class="ghost small" onclick="greOpen(${gre.day})">← Back to Day ${gre.day} class</button></div>` : ''}<div id="fc"></div>`}</div>
     <div class="card"><h2>How it works</h2><ul class="notes">
       <li><b>Missed-words queue:</b> every word you get wrong (flashcards, phone, quiz) joins the queue. From the next day it comes back in a mixed warm-up before your flashcards - meaning, word or sentence questions. <b>${qu.target} correct answers</b> remove it.</li>

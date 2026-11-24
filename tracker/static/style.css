@@ -279,3 +279,10 @@ pre.ocr { white-space: pre-wrap; font-size: 12px; max-height: 280px; overflow: a
 .diff.add { color: var(--ok); }
 .diff.del { color: var(--bad); }
 a.btnlink { font-size: 12px; font-weight: 600; color: var(--accent-2); white-space: nowrap; }
+
+/* practice set progress dots (lesson concepts) */
+.pdots { display: flex; gap: 6px; flex-wrap: wrap; }
+.pdot { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--muted); background: transparent; }
+.pdot.cur { border-color: var(--accent-2); box-shadow: 0 0 0 2px var(--accent-soft); }
+.pdot.ok { background: var(--ok); border-color: var(--ok); }
+.pdot.bad { background: var(--bad); border-color: var(--bad); }
