@@ -158,7 +158,7 @@ def warmup(t):
 def warmup_answer(t):
     _check(t)
     b = request.get_json(silent=True) or {}
-    return jsonify(gre.queue_answer(str(b.get('word', ''))[:60], bool(b.get('correct'))))
+    return jsonify(gre.queue_answer(str(b.get('word', ''))[:60], bool(b.get('correct')), str(b.get('q') or '')[:2000] or None))
 
 
 @app.get('/v/<t>/eod')
@@ -171,7 +171,7 @@ def eod(t):
 def eod_answer(t):
     _check(t)
     b = request.get_json(silent=True) or {}
-    return jsonify(gre.eod_answer(str(b.get('word', ''))[:60], bool(b.get('correct'))))
+    return jsonify(gre.eod_answer(str(b.get('word', ''))[:60], bool(b.get('correct')), str(b.get('q') or '')[:2000] or None))
 
 
 PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -223,7 +223,7 @@ function draw(){$('#pg').style.width=(total?Math.round(100*i/total):100)+'%';
  document.querySelectorAll('[data-c]').forEach(b=>b.onclick=()=>pick(+b.dataset.c));
  const nx=$('#nx');if(nx){nx.onclick=()=>{i++;picked=null;draw();};$('#sy').onclick=()=>say(q.word);}}
 async function pick(j){if(picked!==null)return;picked=j;const q=items[i];draw();
- try{await fetch('/v/'+T+'/'+mode,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({word:q.word,correct:j===q.a})});}
+ try{await fetch('/v/'+T+'/'+mode,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({word:q.word,correct:j===q.a,q:q.q})});}
  catch(e){$('#info').textContent='Lost connection - that answer was not saved.';}}
 function drawCard(){const w=items[i];$('#info').textContent=(i+1)+' of '+total+' - group '+w.group+' - '+(w.box?'box '+w.box:'new word');
  $('#box').innerHTML='<div class="card center" id="fc"><div class="w">'+esc(w.word)+'</div><button class="say" id="sy">&#128266; say it</button>'+(shown?'<div class="d">'+esc(w.def)+'</div>':'<div class="meta">Tap to reveal</div>')+'</div><div class="row">'+(shown?'<button class="no" id="no">Didn&#39;t know</button><button class="yes" id="yes">Knew it</button>':'<button class="show" id="sh">Reveal meaning</button>')+'</div>';

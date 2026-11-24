@@ -66,7 +66,7 @@ views.gre = async () => {
 const body = () => $('#gre-body');
 
 // ---------------------------------------------------------------- class
-const PARTS = [['notes', 'Study notes'], ['watch', 'Watch'], ['tutor', 'Tutor'], ['practice', 'Solve sums'], ['vocab', 'Vocab'], ['quiz', 'Quiz'], ['homework', 'Homework'], ['eod', 'Missed-words review'], ['read', 'Go deeper']];
+const PARTS = [['notes', 'Study notes'], ['watch', 'Watch'], ['tutor', 'Tutor'], ['practice', 'Solve sums'], ['vocab', 'Vocab'], ['quiz', 'Quiz'], ['weekly', 'Weekly test'], ['homework', 'Homework'], ['eod', 'Missed-words review'], ['read', 'Go deeper']];
 async function greClass() {
   if (quizMode()) return drawQuizView();
   const n = gre.day;
@@ -76,7 +76,7 @@ async function greClass() {
   const st = gre.ov.status;
   const isCurrent = n === st.current;
   const shown = PARTS.filter(([k]) => !((k === 'watch' && !d.videos.length) || (k === 'read' && !d.read.length) || (k === 'practice' && !d.practice.length && !d.books.length)
-    || (k === 'quiz' && !d.has_quiz) || (k === 'tutor' && !(d.course || []).length) || (k === 'homework' && !d.homework) || (k === 'eod' && !d.vocab_words.length && !d.review_groups.length) || (k === 'vocab' && !d.vocab_words.length && !d.review_groups.length) || (k === 'notes' && !d.notes.length && !(d.study && (d.study.notes.length || d.study.sheet)))));
+    || (k === 'quiz' && !d.has_quiz) || (k === 'weekly' && !d.weekly) || (k === 'tutor' && !(d.course || []).length) || (k === 'homework' && !d.homework) || (k === 'eod' && !d.vocab_words.length && !d.review_groups.length) || (k === 'vocab' && !d.vocab_words.length && !d.review_groups.length) || (k === 'notes' && !d.notes.length && !(d.study && (d.study.notes.length || d.study.sheet)))));
   if (d.essay) shown.push(['essay', 'Essay']);
   if (d.mock) shown.push(['mock', 'Mock test']);
   const chip = ([k, l]) => `<button class="chip ${parts[k] ? 'on' : ''}" data-part="${k}" title="Tick when done">${parts[k] ? '✓ ' : ''}${l}</button>`;
@@ -94,7 +94,7 @@ async function greClass() {
   if ((d.course || []).length) S.push(step('tutor', ++i, 'Tutor session — worked examples, then you try', courseDayBox(d)));
   if (d.practice.length || d.books.length) S.push(step('practice', ++i, 'Solve sums', `
       <div class="meta" style="margin-bottom:8px">Do every question first (timed, no peeking), then watch the video solution for anything you missed or guessed.
-        Got one wrong (or guessed)? Tap its <b>✗</b> - it is saved to your Error log to redo in a week.</div>
+        Got one wrong (or guessed)? Tap its <b>✗</b> - it is saved to your Error log to redo from tomorrow until you get it right 3 times.</div>
       ${d.practice.map((p) => `<div class="pset"><div class="row"><b>${esc(p.name)}</b><span class="meta">${p.items.length} questions · Magoosh</span><span style="flex:1"></span>${ext(p.folder, 'folder')}</div>
         <div class="qgrid">${p.items.map((it) => { const st = (d.practice_marks || {})[`${p.code}:${it.n}`];
           return `<span class="q ${st === 'Open' ? 'wrong' : st === 'Fixed' ? 'fixed' : ''}">${it.q.map((u, j) => ext(u, j ? `p${j + 1}` : `Q${it.n}`)).join(' ')}${it.s ? ` · ${ext(it.s, '▶')}` : ''}
@@ -110,6 +110,7 @@ async function greClass() {
   else if (d.review_groups.length) S.push(step('vocab', ++i, 'Vocab review', `${warmup}<div>Review day — no new words. Clear your due flashcards (groups ${d.review_groups[0]}–${d.review_groups[d.review_groups.length - 1]}).</div>`,
     `<button class="small" onclick="greOpen(${n}, 'vocab')">Open flashcards</button>`));
   if (d.has_quiz) S.push(step('quiz', ++i, 'Quiz', `<div id="quiz-box">${quizIntro(d)}</div>`));
+  if (d.weekly) S.push(step('weekly', ++i, `Week ${d.weekly.week} summary test &amp; revision`, weeklyBox(d.weekly)));
   if (d.essay) S.push(step('essay', ++i, 'Essay — Analyze an Issue (30 minutes)', essayBox(d)));
   if (d.mock) S.push(step('mock', ++i, 'Full-length practice test', `<div>${ext(d.mock.url, esc(d.mock.name))}</div>
       <div class="meta" style="margin:6px 0">When you finish, add a screenshot of the score report - the app reads the scores and per-question results.
@@ -164,10 +165,11 @@ async function greClass() {
     d.practice_marks = { ...(d.practice_marks || {}), [b.dataset.mk]: r.status };
     chip.classList.toggle('wrong', wrong); chip.classList.remove('fixed'); b.textContent = '✗';
     b.title = wrong ? 'Marked wrong - in your Error log. Click to undo.' : 'I got this wrong - save it to redo';
-    toast(wrong ? `Q${qn} saved to your Error log - redo it in a week` : `Q${qn} removed from your Error log`);
+    toast(wrong ? `Q${qn} saved to your Error log - redo it from tomorrow` : `Q${qn} removed from your Error log`);
   });
   const rv = $('#reveal'); if (rv) rv.onclick = () => body().querySelectorAll('.words').forEach((w) => w.classList.toggle('show'));
   const qs = $('#q-start'); if (qs) qs.onclick = () => startQuiz(n);
+  const wk = $('#wk-start'); if (wk) wk.onclick = () => startWeekTest(d.weekly.week, n);
   bindErrorForm(d);
   bindEssay(d);
   bindTutor(n);
@@ -212,7 +214,18 @@ function quizIntro(d) {
       ${vt.length || hasVocab ? `<li><div class="grow"><b>Section ${qt.length ? 2 : 1} · Verbal</b><div class="meta">${[hasVocab ? (d.vocab_words.length ? `8 of today's words (group ${d.vocab_group}) in sentences` : '8 of your weakest words in sentences') : '', ...vt.map((t) => esc(t.name))].filter(Boolean).join(' · ')}</div>
         ${hasVocab && vs.total ? `<div class="meta">${vs.ready >= vs.total ? 'All of today\'s word sentences are ready.' : `GRE-style sentences ready for ${vs.ready} of ${vs.total} words${vs.running ? ' - your local AI is writing the rest' : ''}; until then a word is tested by its meaning.`}</div>` : ''}</div></li>` : ''}</ul>
     <div class="row" style="margin-top:10px"><button id="q-start">${d.quizzes.length ? 'Retake quiz (new questions)' : 'Start quiz'}</button>
-    ${best !== null ? `<span class="meta">Best so far: <b>${best}%</b> · ${d.quizzes.length} attempt${d.quizzes.length > 1 ? 's' : ''}</span>` : '<span class="meta">Wrong answers go to your Error log; missed words go back to flashcard box 1.</span>'}</div>`;
+    ${best !== null ? `<span class="meta">Best so far: <b>${best}%</b> · ${d.quizzes.length} attempt${d.quizzes.length > 1 ? 's' : ''}</span>` : '<span class="meta">Wrong answers go to your Error log; missed words go to the missed-words queue. Questions you have answered are not repeated.</span>'}</div>`;
+}
+
+function weeklyBox(w) {
+  const last = w.attempts.length ? w.attempts[w.attempts.length - 1] : null;
+  return `<div class="meta" style="margin-bottom:8px">Revise first: read this week's revision sheet (step 1) and the Error log. Then one test on the whole week, in timed sections with breaks.</div>
+    <ul class="list">
+      ${w.quant.length ? `<li><div class="grow"><b>Quant</b> · 20 questions, new numbers<div class="meta">${w.quant.map(esc).join(' · ')}</div></div></li>` : ''}
+      ${w.verbal.length ? `<li><div class="grow"><b>Verbal</b> · questions you have never answered<div class="meta">${w.verbal.map(esc).join(' · ')}</div></div></li>` : ''}
+      ${w.words ? `<li><div class="grow"><b>Vocabulary</b> · all ${w.words} words of week ${w.week}<div class="meta">Meaning, word and fill-the-blank questions (new sentences where ready)${w.missed_words ? ` · ${w.missed_words} of them are still in your missed-words queue` : ''}</div></div></li>` : ''}</ul>
+    <div class="row" style="margin-top:10px"><button id="wk-start">${last ? 'Retake weekly test' : 'Start weekly test'}</button>
+      <span class="meta">${last ? `Last: <b>${last.pct}%</b> (${last.score}/${last.total}) on ${fmtDate(last.date, { day: 'numeric', month: 'short' })}` : 'Wrong answers come back (Error log redos and word warm-ups) until you get them right 3 times.'}</span></div>`;
 }
 
 // ---------------------------------------------------------------- essay
@@ -332,7 +345,7 @@ function bindErrorForm(d) {
     if (!$('#er-q').value.trim()) return toast('Describe the question first');
     await post('/api/gre/errors', { day: d ? d.day : null, topic: $('#er-topic').value, source: d ? `Practice - day ${d.day}` : 'Manual',
       question: $('#er-q').value, answer: $('#er-why').value, note: $('#er-note').value });
-    toast('Logged - due for a redo in a week'); $('#er-q').value = ''; $('#er-note').value = '';
+    toast('Logged - due for a redo tomorrow'); $('#er-q').value = ''; $('#er-note').value = '';
   };
 }
 const errView = { filter: 'Due', kind: 'All', redo: null };
@@ -355,12 +368,12 @@ async function greErrors() {
         <tbody>${sum.kinds.filter((k) => sum.trend[k].some((x) => x)).map((k) => `<tr><td style="text-align:left">${k}</td>${sum.trend[k].map((x) => `<td class="${x && x >= maxT * 0.6 ? 'hot' : ''}">${x || '·'}</td>`).join('')}</tr>`).join('')
           || '<tr><td colspan="7" class="empty">No mistakes logged in the last 6 weeks.</td></tr>'}</tbody></table>
         <div class="meta" style="margin-top:6px">A falling row means that kind of mistake is going away.</div></div></div>
-    <div class="card"><div class="toolbar"><b>Error log</b><span class="meta">Each mistake comes back for a redo after a week. Solve it cold: right → Fixed, wrong → back in 3 days.</span>
+    <div class="card"><div class="toolbar"><b>Error log</b><span class="meta">Each mistake comes back the next day. Solve it cold: 3 correct redos (on different days) fix it; a wrong redo brings it back tomorrow.</span>
       <span style="flex:1"></span>${select(['Due', 'Open', 'Fixed', 'All'], errView.filter, 'id="er-f"')}</div>
     ${errView.filter === 'Due' && !list.length ? `<div class="empty">Nothing due for a redo today.${rows.some((r) => r.status === 'Open') ? ' Switch the filter to "Open" to see everything still open.' : ''}</div>` : ''}
     <div class="tablewrap"><table><thead><tr><th>Date</th><th>Topic</th><th>Question</th><th>Answer</th><th>Why</th><th>Rule for next time</th><th>Status</th><th></th></tr></thead>
     <tbody>${list.map((r) => `<tr data-id="${r.id}"><td style="white-space:nowrap">${fmtDate(r.created)}<div class="meta">${esc(r.source || '')}</div>
-        ${r.status === 'Open' ? `<div class="meta">${r.due ? '<span class="pill warn">redo due</span>' : `redo ${fmtDate(r.redo_on, { day: 'numeric', month: 'short' })}`}${r.redo_count ? ` · ${r.redo_count} tr${r.redo_count > 1 ? 'ies' : 'y'}` : ''}</div>` : ''}</td>
+        ${r.status === 'Open' ? `<div class="meta">${r.due ? '<span class="pill warn">redo due</span>' : `redo ${fmtDate(r.redo_on, { day: 'numeric', month: 'short' })}`}${` · ${r.redo_hits || 0}/${r.redo_target || 3} right`}${r.redo_count ? ` · ${r.redo_count} tr${r.redo_count > 1 ? 'ies' : 'y'}` : ''}</div>` : ''}</td>
       <td>${esc(r.topic || '')}</td>
       <td style="max-width:340px;white-space:pre-wrap">${esc((r.question || '').length > 220 ? r.question.slice(0, 220) + '…' : r.question)}${r.detail && r.detail.links ? `<div class="meta">${r.detail.links.map((l) => ext(l.url, esc(l.label))).join(' · ')}</div>` : ''}</td><td style="max-width:200px">${esc(r.answer || '')}${r.secs ? `<div class="meta">${r.secs} s</div>` : ''}</td>
       <td>${select(sum.kinds, r.kind || 'Unsorted', 'class="er-kind"')}</td>
@@ -388,7 +401,7 @@ function redoBox(r) {
   let inner;
   if (canAnswer) {
     inner = `<div id="rd-q">${qBody(q, R.r, { locked: R.checked, reveal: R.checked })}</div>
-      ${R.checked ? `<div class="explain ${R.ok ? 'ok' : 'bad'}"><b>${R.ok ? 'Right - marked Fixed.' : 'Still wrong - it comes back in 3 days.'}</b> ${esc(q.x || r.note || '')}</div>`
+      ${R.checked ? `<div class="explain ${R.ok ? 'ok' : 'bad'}"><b>${R.ok ? (R.res && R.res.fixed ? `Right - ${R.res.hits}/${R.res.target}: fixed!` : `Right - ${R.res ? R.res.hits : '?'}/${R.res ? R.res.target : 3}. It comes back in 2 days.`) : 'Still wrong - it comes back tomorrow.'}</b> ${esc(q.x || r.note || '')}</div>`
         : `<div class="row" style="margin-top:10px"><button id="rd-check" ${answered(q, R.r) ? '' : 'disabled'}>Check</button><span class="meta">Solve it cold, without looking at your notes.</span></div>`}`;
   } else {
     const links = q && q.links ? q.links.filter((l) => R.revealed || !/solution/i.test(l.label)) : [];
@@ -403,7 +416,7 @@ function redoBox(r) {
 }
 function bindRedo(r) {
   const R = errView.redo; const q = r.detail;
-  const finish = async (ok) => { R.checked = true; R.ok = ok; await post(`/api/gre/errors/${r.id}/redo`, { correct: ok }); greErrors(); };
+  const finish = async (ok) => { R.checked = true; R.ok = ok; R.res = await post(`/api/gre/errors/${r.id}/redo`, { correct: ok }); greErrors(); };
   $('#rd-close').onclick = () => { errView.redo = null; greErrors(); };
   const nx = $('#rd-next'); if (nx) nx.onclick = () => {
     const next = (gre.errRows || []).find((x) => x.due && x.id !== r.id);
@@ -446,7 +459,8 @@ async function greVocab() {
   gre.v = v; gre.vi = 0; gre.vshow = false; gre.qu = qu;
   const wu = gre.warm && gre.warm.date === isoToday() ? gre.warm : (gre.warm = { date: isoToday(), i: 0, picked: null, results: [], skipped: false, qs: qu.warmup });
   const warming = wu.qs.length && !wu.skipped && wu.i < wu.qs.length;
-  const boxes = [1, 2, 3, 4, 5].map((b) => `<div class="card stat"><div class="l">Box ${b}${b === 1 ? ' (daily)' : b === 5 ? ' (mastered)' : ''}</div><div class="n">${v.boxes[b] || 0}</div></div>`).join('');
+  const L = v.learn || {};
+  const boxes = [['New (not met yet)', L.new], ['Missed - in the queue', L.missed], ['Known', L.known]].map(([l, x]) => `<div class="card stat"><div class="l">${l}</div><div class="n">${x || 0}</div></div>`).join('');
   const dots = (h) => `<span class="dots">${[...Array(qu.target)].map((_, k) => `<i class="${k < h ? 'on' : ''}"></i>`).join('')}</span>`;
   const done = wu.results.length ? `<div class="explain ok" style="margin-bottom:10px">Warm-up done: ${wu.results.filter((r) => r.ok).length}/${wu.results.length} right${wu.results.some((r) => r.cleared) ? ` · cleared: ${wu.results.filter((r) => r.cleared).map((r) => esc(r.word)).join(', ')}` : ''}.</div>` : '';
   const status = (w) => w.today ? "missed today - in tomorrow's warm-up" : w.done_today ? 'done today' : "in today's warm-up";
@@ -456,9 +470,10 @@ async function greVocab() {
         ${v.budget && v.budget.daily_cap ? `<div class="meta" style="margin-bottom:8px">Today's limit: ${v.budget.daily_cap} cards (${v.budget.done_today} done so far) - about half reviews, half new words.${v.budget.waiting ? ` ${v.budget.waiting} more cards wait for the next days.` : ''}${v.budget.cap < 30 ? ` Fewer new words while your missed-words queue has ${v.budget.queue} words.` : ''}</div>` : ''}
         ${wu.results.length && gre.day ? `<div style="margin-bottom:8px"><button class="ghost small" onclick="greOpen(${gre.day})">← Back to Day ${gre.day} class</button></div>` : ''}<div id="fc"></div>`}</div>
     <div class="card"><h2>How it works</h2><ul class="notes">
-      <li><b>Missed-words queue:</b> every word you get wrong (flashcards, phone, quiz) joins the queue. From the next day it comes back in a mixed warm-up before your flashcards - meaning, word or sentence questions. <b>${qu.target} correct answers</b> remove it.</li>
+      <li><b>Only what you get wrong is repeated.</b> A word you get right is known and is not drilled again (the weekly test checks it once more).</li>
+      <li><b>Missed-words queue:</b> every word you get wrong (flashcards, phone, quiz, tests) joins the queue. From the next day it comes back in a mixed warm-up (once a day) - meaning, word or a new sentence. <b>${qu.target} correct answers</b> on different days clear it.</li>
       <li>Words unlock with your classes (one GregMat group per weekday).</li>
-      <li>"Knew it" moves a word up a box; "Didn't know" sends it back to box 1 and into the queue.</li><li>Box 1 is shown daily, box 2 after 1 day, box 3 after 3, box 4 after a week, box 5 after 15 days.</li>
+      <li>Flashcards show only words you have not met yet. "Knew it" = known; "Didn't know" = into the queue.</li><li>A sentence you have answered is never shown again - the local AI writes new ones.</li>
       <li>Want them on your phone? Turn on <a href="#" onclick="gre.tab='gsettings';views.gre();return false">phone flashcards</a> in Settings.</li></ul></div></div>
     <div class="card" style="margin-top:16px"><div class="row"><h2 style="margin:0">Missed-words queue <span class="pill">${qu.queue.length}</span></h2>
         <span class="meta">${qu.cleared} cleared so far · ${qu.target} correct answers clear a word${qu.warmup_waiting ? ` · ${qu.warmup_waiting} more wait for the next warm-ups (max ${qu.cap} a day)` : ''}</span><span style="flex:1"></span>
@@ -468,7 +483,7 @@ async function greVocab() {
         <div class="words show qwords" style="margin-top:8px">${qu.queue.map((w) => `<div class="word"><b>${esc(w.word)}</b> ${dots(w.hits)}
           <span class="meta">${status(w)}${w.misses ? ` · missed ${w.misses}x in warm-ups` : ''}</span><span class="def">${esc(w.def)}</span></div>`).join('')}</div></details>`
         : '<div class="empty">Empty - words you miss will appear here.</div>'}</div>
-    <div class="grid g5" style="margin:16px 0">${boxes}</div>
+    <div class="grid g3" style="margin:16px 0">${boxes}</div>
     <div class="card"><div class="toolbar"><h2 style="margin:0">All 37 GregMat groups</h2><span style="flex:1"></span><input id="v-q" placeholder="Search a word…"></div><div id="v-groups"></div></div>`;
   if (warming) drawWarmup(); else drawCard();
   const rs = $('#wu-resume'); if (rs) rs.onclick = () => { wu.skipped = false; greVocab(); };
@@ -483,7 +498,7 @@ async function greVocab() {
       if (q && !ws.length) return '';
       return `<details ${q ? 'open' : ''} class="vg"><summary><b>Group ${g.group}</b> ${g.unlocked ? '' : '<span class="pill">locked</span>'}
         <span class="meta">${g.seen}/30 seen · ${g.mastered} mastered</span><span class="bar" style="display:inline-block;width:120px;vertical-align:middle;margin-left:8px"><i style="width:${Math.round(100 * g.mastered / 30)}%"></i></span></summary>
-        <div class="words show">${ws.map((w) => `<div class="word"><b>${esc(w.word)}</b> <span class="pill">${w.box ? 'box ' + w.box : 'new'}</span><span class="def">${esc(w.def)}</span></div>`).join('')}</div></details>`;
+        <div class="words show">${ws.map((w) => `<div class="word"><b>${esc(w.word)}</b> <span class="pill">${!w.box ? 'new' : w.box === 1 ? 'missed' : 'known'}</span><span class="def">${esc(w.def)}</span></div>`).join('')}</div></details>`;
     }).join('');
   };
   drawGroups();
@@ -514,7 +529,7 @@ function runWordDrill(el, qs, endpoint, { label = 'Word review', onDone = () => 
     const q = qs[st.i]; st.picked = j;
     st.res.push({ word: q.word, ok: j === q.a });
     draw();
-    await post(endpoint, { word: q.word, correct: j === q.a });
+    await post(endpoint, { word: q.word, correct: j === q.a, q: q.q });
   };
   const next = () => { st.i++; st.picked = null; draw(); };
   document.onkeydown = (e) => {
@@ -546,7 +561,7 @@ function drawWarmup() {
   const answer = async (j) => {
     if (wu.picked !== null) return;
     wu.picked = j; const ok = j === q.a;
-    wu.last = await post('/api/gre/vocab/queue', { word: q.word, correct: ok });
+    wu.last = await post('/api/gre/vocab/queue', { word: q.word, correct: ok, q: q.q });
     wu.results.push({ word: q.word, ok, cleared: wu.last.cleared });
     drawWarmup();
   };
@@ -598,7 +613,7 @@ async function greProgress() {
     <div class="grid g4" style="margin-bottom:16px">
       <div class="card stat"><div class="l">Classes done</div><div class="n">${o.status.done}/${o.status.total}</div><div class="x">${o.status.behind ? o.status.behind + ' behind plan' : 'on track'}</div></div>
       <div class="card stat"><div class="l">Hours studied</div><div class="n">${(o.minutes / 60).toFixed(1)}</div><div class="x">from completed classes</div></div>
-      <div class="card stat"><div class="l">Words mastered (box 4-5)</div><div class="n">${mastered}</div><div class="x">of 1,112 GregMat words</div></div>
+      <div class="card stat"><div class="l">Words known</div><div class="n">${mastered}</div><div class="x">of 1,112 GregMat words</div></div>
       <div class="card stat"><div class="l">Quizzes taken</div><div class="n">${o.quizzes.length}</div><div class="x">${o.errors_open} open errors · ${o.errors_due} due</div></div></div>
     <div class="grid g2"><div class="grid" style="align-content:start">
       <div class="card"><h2>Pacing by chapter <span class="meta">(slowest first, from course tests)</span></h2>

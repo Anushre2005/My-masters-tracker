@@ -141,7 +141,7 @@ async function greCourse() {
           <li><b>Chapter test</b>: ${sp.chapter.n} questions, ${sp.chapter.minutes} minutes, no hints. 80% = mastered; under 60% = re-learn.</li>
           <li><b>Unit test</b>: ${sp.unit.n} questions mixing the unit's chapters - you must spot what each question needs.</li>
           <li><b>Section simulation</b>: real GRE timing; section 2 gets harder if you do well on section 1.</li>
-          <li>${subj === 'quant' ? 'Every test has new numbers, so retakes never repeat.' : 'Tests serve questions you have not seen yet first.'} Mistakes go to your Error log automatically, with a redo date.</li></ol></div>
+          <li>${subj === 'quant' ? 'Every test has new numbers, so retakes never repeat.' : 'A question you have answered is never served again; when the hand-written ones run out, tests use new sentences on your words.'} Mistakes go to your Error log and come back until you get them right 3 times.</li></ol></div>
         <div class="card"><h2>Weak spots</h2>${s.weak.length ? `<ul class="list">${s.weak.map((w) => `<li><div class="grow"><b>${esc(w.name)}</b><div class="meta">${esc(w.title)} · ${w.correct}/${w.total} right</div></div>
             ${pctPill(w.pct)}<button class="ghost small" data-relearn="${w.chapter}:${w.concept}">Re-learn</button></li>`).join('')}</ul>
           <button style="margin-top:10px" data-test="drill:">Weak-spot drill · ${sp.drill.n} Q</button>` : '<div class="empty">Concepts you get wrong in tests show up here.</div>'}
@@ -302,7 +302,8 @@ async function recordPractice(L, right) {
   if (S.res[S.i] !== undefined) return;
   S.res[S.i] = right;
   await post(`/api/gre/course/practice/${L.chapter}/${L.ci}`, { correct: right, word: q.word || null, gen: q.gen || null,
-    q: q.passage ? `${q.ptitle || 'Passage'}: ${q.q}` : q.q, answer: rightText(q), x: q.x });
+    q: q.passage ? `${q.ptitle || 'Passage'}: ${q.q}` : q.q, answer: rightText(q), x: q.x,
+    item: { kind: q.kind, q: q.q, c: q.c, a: q.a, v: q.v, x: q.x, passage: q.passage, ptitle: q.ptitle, diff: q.diff, gen: q.gen } });
 }
 async function nextPractice(L) {
   const S = L.set;
@@ -334,6 +335,7 @@ async function startTest(kind, key = '', level = 'mixed', fromDay = null, subjec
   if (course.test && !confirm('A test is already running. Abandon it and start this one?')) return;
   const t = await api(`/api/gre/course/test?kind=${kind}&key=${encodeURIComponent(key || '')}&level=${level}&subject=${subject}`);
   if (t.error) return toast(t.error);
+  if (t.fresh_note) toast(t.fresh_note);
   clearInterval(course.timer); course.timer = null;
   course.subject = subject;
   course.test = { ...t, subject, i: 0, resp: t.questions.map(() => null), marked: new Set(), secs: t.questions.map(() => 0),
@@ -348,6 +350,16 @@ async function startQuiz(n) {
   if (!qz.sections || !qz.sections.length) return toast('No quiz for this day.');
   clearInterval(course.timer); course.timer = null;
   course.quiz = { day: n, title: qz.title, sections: qz.sections, idx: 0, items: [], seconds: 0, minutes: 0 };
+  startQuizSection();
+}
+async function startWeekTest(week, day) {
+  if (course.test && !confirm('A test is already running. Abandon it and start the weekly test?')) return;
+  const wt = await api('/api/gre/weektest/' + week);
+  if (!wt.sections || !wt.sections.length) return toast('Nothing to test for this week yet.');
+  const c = wt.counts;
+  if (!confirm(`Week ${week} summary test: ${c.quant} Quant, ${c.verbal} Verbal and ${c.words} vocabulary questions in ${wt.sections.length} timed sections (about ${wt.sections.reduce((a, s) => a + s.minutes, 0)} min). Start?`)) return;
+  clearInterval(course.timer); course.timer = null;
+  course.quiz = { weekly: true, week, day, title: wt.title, sections: wt.sections, idx: 0, items: [], seconds: 0, minutes: 0 };
   startQuizSection();
 }
 async function startMock(day = null) {
@@ -498,6 +510,15 @@ async function finishQuizSection(t, items, seconds) {
     course.quiz = null; course.view = 'result'; course.onlyWrong = false;
     return showCourse();
   }
+  if (Q.weekly) {  // each section is saved as a test (Error log, missed-words queue, predictor)
+    const s = Q.sections[Q.idx];
+    await post('/api/gre/course/test', { kind: 'week', key: String(Q.week), title: s.title, minutes: t.minutes, seconds, items, subject: s.subject, day: Q.day });
+    if (Q.idx + 1 < Q.sections.length) { Q.idx++; course.view = 'quizbreak'; return showCourse(); }
+    await post('/api/gre/day/' + Q.day, { parts: { weekly: true } });
+    course.result = { kind: 'week', quiz: true, key: '', title: Q.title, minutes: Q.minutes, seconds: Q.seconds, items: Q.items, fresh: true, fromDay: Q.day, subject: 'mixed' };
+    course.quiz = null; course.view = 'result'; course.onlyWrong = false;
+    return showCourse();
+  }
   if (Q.idx + 1 < Q.sections.length) { Q.idx++; course.view = 'quizbreak'; return showCourse(); }
   const score = Q.items.filter((i) => i.correct).length;
   await post('/api/gre/quiz', { day: Q.day, score, total: Q.items.length, items: Q.items });
@@ -540,7 +561,7 @@ function drawResult() {
     ${R.mockScores ? `<div class="card" style="margin-top:12px;background:var(--grey-soft)"><b>Estimated scores</b> - Quant <b>${R.mockScores.quant.score ?? '-'}</b> (${R.mockScores.quant.right}/${R.mockScores.quant.total} right)
         · Verbal <b>${R.mockScores.verbal.score ?? '-'}</b> (${R.mockScores.verbal.right}/${R.mockScores.verbal.total} right)
         <div class="meta">A rough estimate from this app's questions; saved to your practice-test scores. Your essay is in the Essays tab - press "Get AI feedback" there for a score.</div></div>` : ''}
-    ${R.quiz && R.fresh ? `<div class="meta" style="margin-top:8px">${items.some((i) => i.topic === 'vocab' && !i.correct) ? 'Words you missed went back to flashcard box 1. ' : ''}Other mistakes are in your Error log.</div>` : ''}
+    ${R.quiz && R.fresh ? `<div class="meta" style="margin-top:8px">${items.some((i) => i.topic === 'vocab' && !i.correct) ? 'Words you missed joined the missed-words queue (warm-ups from tomorrow, 3 right answers clear them). ' : ''}Other mistakes are in your Error log.</div>` : ''}
     <div class="grid g3" style="margin:16px 0">
       <div class="card"><h2>${byConcept ? 'By concept' : 'By chapter'}</h2><table><tbody>${Object.values(groups).map((g) => {
         const p = Math.round(100 * g.c / g.n);
@@ -572,7 +593,7 @@ function drawResult() {
   $('#rs-wrong').onchange = (e) => { course.onlyWrong = e.target.checked; drawResult(); };
   body().querySelectorAll('[data-relearn]').forEach((b) => b.onclick = () => { const [ch, c] = b.dataset.relearn.split(':'); openLesson(ch, c === '' ? null : +c); });
   const s2 = $('#rs-s2'); if (s2) s2.onclick = () => startTest('section2', '', s1Next, R.fromDay, subj);
-  const ag = $('#rs-again'); if (ag) ag.onclick = () => R.quiz ? startQuiz(R.fromDay) : startTest(R.kind, R.kind === 'drill' ? '' : R.key, 'mixed', R.fromDay, subj);
+  const ag = $('#rs-again'); if (ag) ag.onclick = () => R.kind === 'week' ? startWeekTest(gre.d && gre.d.weekly ? gre.d.weekly.week : 1, R.fromDay) : R.quiz ? startQuiz(R.fromDay) : startTest(R.kind, R.kind === 'drill' ? '' : R.key, 'mixed', R.fromDay, subj);
   // the review list has inputs from qBody; make sure none of them grab focus
   body().querySelectorAll('#ne-in').forEach((x) => x.removeAttribute('id'));
 }

@@ -340,6 +340,11 @@ def api_gre_quiz(n):
     return jsonify(gre.build_quiz(n))
 
 
+@app.get('/api/gre/weektest/<int:w>')
+def api_gre_weektest(w):
+    return jsonify(gre.week_test(w))
+
+
 @app.post('/api/gre/quiz')
 def api_gre_quiz_save():
     return jsonify(gre.record_quiz(request.json))
@@ -358,7 +363,7 @@ def api_gre_vocab_queue():
 @app.post('/api/gre/vocab/queue')
 def api_gre_vocab_queue_answer():
     b = request.json or {}
-    return jsonify(gre.queue_answer(str(b.get('word', '')), bool(b.get('correct'))))
+    return jsonify(gre.queue_answer(str(b.get('word', '')), bool(b.get('correct')), str(b.get('q') or '')[:2000] or None))
 
 
 @app.get('/api/gre/vocab/eod')
@@ -369,7 +374,7 @@ def api_gre_vocab_eod():
 @app.post('/api/gre/vocab/eod')
 def api_gre_vocab_eod_answer():
     b = request.json or {}
-    return jsonify(gre.eod_answer(str(b.get('word', '')), bool(b.get('correct'))))
+    return jsonify(gre.eod_answer(str(b.get('word', '')), bool(b.get('correct')), str(b.get('q') or '')[:2000] or None))
 
 
 @app.post('/api/gre/vocab')

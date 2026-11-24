@@ -17,7 +17,10 @@ from . import db, gre_vocab
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS gre_vocab_ctx (
     word TEXT, sentence TEXT, clue TEXT, ok INTEGER, created TEXT, PRIMARY KEY (word, sentence));
+CREATE TABLE IF NOT EXISTS gre_seen (key TEXT PRIMARY KEY, n INTEGER DEFAULT 0, right INTEGER DEFAULT 0, first TEXT, last TEXT);
 """
+# A sentence you have answered once is never shown again (key 'v:' + sentence in gre_seen); new ones are written instead.
+FRESH_SQL = "AND ('v:' || sentence) NOT IN (SELECT key FROM gre_seen)"
 BATCH = 6          # words per model call
 MAX_TRIES = 3      # attempts per word before giving up (falls back to the meaning question)
 _lock = threading.Lock()
@@ -90,16 +93,17 @@ def distractors(word, rng, pool, k=4):
     return rng.sample(cands, k)
 
 
-def sentences(word):
+def sentences(word, fresh=True):
+    """Checked sentences for a word; by default only the ones you have not answered yet."""
     ensure()
-    return db.query('SELECT sentence, clue FROM gre_vocab_ctx WHERE word=? AND ok=1', (word,))
+    return db.query(f"SELECT sentence, clue FROM gre_vocab_ctx WHERE word=? AND ok=1 {FRESH_SQL if fresh else ''}", (word,))
 
 
 def status(words):
     ensure()
     if not words:
         return {'ready': 0, 'total': 0, 'running': _state['running']}
-    rows = db.query(f"SELECT DISTINCT word FROM gre_vocab_ctx WHERE ok=1 AND word IN ({','.join('?' * len(words))})", tuple(words))
+    rows = db.query(f"SELECT DISTINCT word FROM gre_vocab_ctx WHERE ok=1 {FRESH_SQL} AND word IN ({','.join('?' * len(words))})", tuple(words))
     return {'ready': len(rows), 'total': len(words), 'running': _state['running'], 'error': _state['last_error']}
 
 
@@ -174,18 +178,33 @@ def _valid(word, s):
     return (s.count('______') == 1 and 60 <= len(s) <= 320 and _stem(word) not in s.lower() and word.lower() not in s.lower())
 
 
+def _near_copy(s, olds):
+    """True when a new sentence is basically one you have already seen (half or more of its words shared)."""
+    a = set(re.findall(r'[a-z]{4,}', (s or '').lower()))
+    for o in olds or ():
+        b = set(re.findall(r'[a-z]{4,}', o.lower()))
+        if a and b and len(a & b) / len(a | b) >= 0.5:
+            return True
+    return False
+
+
 def generate(words, style=None):
     """Write and check sentences for these words (skips words that already have one or have failed MAX_TRIES times).
     With a style (see STYLES) every sentence must use that kind of clue - used by the verbal course's practice sets."""
     ensure()
     style = style if style in STYLES else None
-    tries = {r['word']: r['n'] for r in db.query("SELECT word, COUNT(*) n FROM gre_vocab_ctx WHERE ok=0 AND COALESCE(style,'')=? GROUP BY word",
-                                                 (style or '',))}
+    week_ago = (dt.datetime.now() - dt.timedelta(days=7)).isoformat(timespec='seconds')
+    tries = {r['word']: r['n'] for r in db.query("SELECT word, COUNT(*) n FROM gre_vocab_ctx WHERE ok=0 AND COALESCE(style,'')=? AND created >= ? GROUP BY word",
+                                                 (style or '', week_ago))}
+    # a word is done when it has a checked sentence you have NOT answered yet; used-up words get a new one
     if style:
-        done = {r['word'] for r in db.query('SELECT word, sentence FROM gre_vocab_ctx WHERE ok=1') if style in style_of(r['sentence'])}
+        done = {r['word'] for r in db.query(f'SELECT word, sentence FROM gre_vocab_ctx WHERE ok=1 {FRESH_SQL}') if style in style_of(r['sentence'])}
     else:
-        done = {r['word'] for r in db.query('SELECT DISTINCT word FROM gre_vocab_ctx WHERE ok=1')}
+        done = {r['word'] for r in db.query(f'SELECT DISTINCT word FROM gre_vocab_ctx WHERE ok=1 {FRESH_SQL}')}
     todo = [w for w in words if w in gre_vocab.DEFS and w not in done and tries.get(w, 0) < MAX_TRIES]
+    old = {}
+    for r in db.query('SELECT word, sentence FROM gre_vocab_ctx WHERE ok=1'):
+        old.setdefault(r['word'], []).append(r['sentence'])
     system = GEN_SYSTEM if not style else GEN_SYSTEM.replace(
         'The sentence MUST contain a clear context clue: a restatement after a colon or semicolon, a contrast ("although", "but", '
         '"rather than"), or a cause ("because", "so").',
@@ -196,14 +215,15 @@ def generate(words, style=None):
     made = 0
     for i in range(0, len(todo), BATCH):
         batch = todo[i:i + BATCH]
-        req = {'words': [{'word': w, 'meaning': gre_vocab.DEFS[w]} for w in batch],
-               'reminder': 'Never write the word or its meaning into the sentence: put ______ where the word goes.'}
+        req = {'words': [{'word': w, 'meaning': gre_vocab.DEFS[w], **({'already_used': old[w][-4:]} if old.get(w) else {})} for w in batch],
+               'reminder': 'Never write the word or its meaning into the sentence: put ______ where the word goes. '
+                           'If a word lists already_used sentences, write a completely different one: a new topic and new wording.'}
         got = _ask(system, json.dumps(req), 0.7, model=writer).get('items') or []
         cands = []
         for it in got:
             w = str(it.get('word', '')).strip().lower()
             w = next((b for b in batch if b.lower() == w), None)
-            if w and _valid(w, it.get('sentence')) and (not style or style in style_of(it['sentence'])):
+            if w and _valid(w, it.get('sentence')) and (not style or style in style_of(it['sentence'])) and not _near_copy(it['sentence'], old.get(w)):
                 cands.append({'word': w, 'sentence': re.sub(r'_{3,}', '______', it['sentence'].strip()), 'clue': str(it.get('clue') or '')[:300]})
         failed = set(batch) - {c['word'] for c in cands}
         if cands:  # independent check: can the question be solved, and only with the intended word?

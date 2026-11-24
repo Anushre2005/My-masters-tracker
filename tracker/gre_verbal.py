@@ -877,18 +877,22 @@ def _draw(r, pool, n, seen, mix):
 
 def _draw_passages(r, n, seen, mix, concepts=None):
     """Whole passages (their questions stay together) until about n questions."""
-    pids = list(PASSAGES)
+    def fresh(p):
+        return [BY_ID[i] for i in PASSAGES[p]['qs'] if (concepts is None or BY_ID[i]['concept'] in concepts)
+                and i not in USED and i not in EXCLUDED]
+    pids = [p for p in PASSAGES if fresh(p)]
     out = []
     while pids and len(out) < n:
-        w = [sum(_weight(BY_ID[i], seen, mix) for i in PASSAGES[p]['qs']) / len(PASSAGES[p]['qs']) for p in pids]
+        w = [sum(_weight(x, seen, mix) for x in fresh(p)) / len(fresh(p)) for p in pids]
         p = r.choices(pids, weights=w)[0]
         pids.remove(p)
-        qs = [BY_ID[i] for i in PASSAGES[p]['qs'] if concepts is None or BY_ID[i]['concept'] in concepts]
-        out += qs[:max(1, n - len(out))]
+        out += fresh(p)[:max(1, n - len(out))]
     return out
 
 
 EXCLUDED = set()  # question ids reported as bad (filled by gre.load_exclusions)
+USED = set()      # question ids you have already answered anywhere (filled by gre before every build) - never served again;
+                  # the ones you got wrong come back only through the Error log redo
 
 
 def _words(s):
@@ -918,19 +922,20 @@ def pick(r, ch, n, seen=None, level='mixed', concepts=None, avoid=None):
     mix = DIFF_W.get(level, DIFF_W['mixed'])
     if ch == 'rc':
         return _draw_passages(r, n, seen, mix, concepts)
-    pool = [x for x in QS if x['chapter'] == ch and (concepts is None or x['concept'] in concepts) and x['id'] not in EXCLUDED] or \
-        [x for x in QS if x['chapter'] == ch and x['id'] not in EXCLUDED] or [x for x in QS if x['chapter'] == ch]
+    ok = [x for x in QS if x['chapter'] == ch and x['id'] not in EXCLUDED and x['id'] not in USED]
+    pool = [x for x in ok if concepts is None or x['concept'] in concepts] or (ok if concepts is not None else [])
     fresh = [x for x in pool if x['id'] not in avoid]
     out = _draw(r, fresh, n, seen, mix)
-    if len(out) < n:  # not enough unseen ones: reuse the ones seen longest ago (seen order is up to the caller)
+    if len(out) < n:  # still never answered, just kept back (e.g. near-copies of a worked example)
         out += _draw(r, [x for x in pool if x['id'] in avoid], n - len(out), seen, mix)
-    return out
+    return out  # may be fewer than n: questions you have answered are never repeated (callers fill with new sentences)
 
 
 def try_question(ch, concept, seen=None, seed=None):
     r = random.Random(seed)
     seen = seen or {}
-    pool = [x for x in QS if x['chapter'] == ch and x['concept'] == concept] or [x for x in QS if x['chapter'] == ch]
+    pool = [x for x in QS if x['chapter'] == ch and x['concept'] == concept and x['id'] not in USED] or \
+        [x for x in QS if x['chapter'] == ch and x['id'] not in USED] or [x for x in QS if x['chapter'] == ch]
     return serve(_draw(r, pool, 1, seen, DIFF_W['easy'])[0], r)
 
 
