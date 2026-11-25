@@ -25,6 +25,23 @@ if sys.stdout is None or sys.stderr is None:
 from tracker import engine, excel_sync, importer, mobile, notify, server, sitewatch  # noqa: E402
 
 
+_mutex = None
+
+
+def first_instance():
+    """True if no other copy of the app is running (Windows named mutex, taken before anything touches the database).
+    Two copies started a few seconds apart both passed the old port check - the first was not listening yet - and then
+    fought over tracker.db ("database is locked")."""
+    global _mutex
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        _mutex = k.CreateMutexW(None, False, 'Local\\MastersTrackerSingleInstance')
+        return k.GetLastError() != 183  # ERROR_ALREADY_EXISTS
+    except Exception:
+        return True
+
+
 def port_in_use(port):
     with socket.socket() as s:
         s.settimeout(0.5)
@@ -41,6 +58,14 @@ def make_icon():
 
 
 def main():
+    if not first_instance():  # already running (maybe still starting up): bring its window forward and exit
+        for _ in range(30):
+            try:
+                urllib.request.urlopen(f'http://127.0.0.1:{int(db.get_setting("port"))}/api/show', timeout=3)
+                break
+            except Exception:
+                time.sleep(1)
+        return
     port = int(db.get_setting('port'))
     url = f'http://127.0.0.1:{port}/'
     hidden = '--hidden' in sys.argv
